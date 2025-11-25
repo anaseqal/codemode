@@ -76,10 +76,10 @@ Adjust timeouts, execution modes, package restrictions, and more.
 
 ```bash
 # Using uv (recommended)
-uv tool install mcp-codemode
+uv tool install mcp-pyrunner
 
 # Using pip
-pip install mcp-codemode
+pip install mcp-pyrunner
 ```
 
 ### From Source
@@ -104,7 +104,7 @@ extensions:
     type: stdio
     enabled: true
     cmd: uvx
-    args: ["mcp-codemode"]
+    args: ["mcp-pyrunner"]
 ```
 
 **If running from source (local development):**
@@ -115,11 +115,11 @@ extensions:
     type: stdio
     enabled: true
     cmd: uv
-    args: ["run", "--directory", "/path/to/codemode", "mcp-codemode"]
+    args: ["run", "--directory", "/path/to/codemode", "mcp-pyrunner"]
     # Replace /path/to/codemode with actual path (e.g., ~/codemode)
 ```
 
-Or use the UI: Extensions → Add Custom Extension → STDIO → Command: `uv run --directory /path/to/codemode mcp-codemode`
+Or use the UI: Extensions → Add Custom Extension → STDIO → Command: `uv run --directory /path/to/codemode mcp-pyrunner`
 
 ### Claude Desktop
 
@@ -131,7 +131,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "codemode": {
       "command": "uvx",
-      "args": ["mcp-codemode"]
+      "args": ["mcp-pyrunner"]
     }
   }
 }
@@ -143,7 +143,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "codemode": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/codemode", "mcp-codemode"]
+      "args": ["run", "--directory", "/path/to/codemode", "mcp-pyrunner"]
     }
   }
 }
@@ -159,7 +159,7 @@ Add to `.cursor/mcp.json`:
   "mcpServers": {
     "codemode": {
       "command": "uvx",
-      "args": ["mcp-codemode"]
+      "args": ["mcp-pyrunner"]
     }
   }
 }
@@ -171,7 +171,7 @@ Add to `.cursor/mcp.json`:
   "mcpServers": {
     "codemode": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/codemode", "mcp-codemode"]
+      "args": ["run", "--directory", "/path/to/codemode", "mcp-pyrunner"]
     }
   }
 }
@@ -326,14 +326,14 @@ View learnings:
 → get_learnings(search="ssl")
 ```
 
-Learnings persist in `~/.mcp-codemode/learnings.json` and improve future executions.
+Learnings persist in `~/.mcp-pyrunner/learnings.json` and improve future executions.
 
 ## Data Storage
 
-Code Mode stores data in `~/.mcp-codemode/`:
+Code Mode stores data in `~/.mcp-pyrunner/`:
 
 ```
-~/.mcp-codemode/
+~/.mcp-pyrunner/
 ├── config.json       # User configuration
 ├── learnings.json    # Error patterns and solutions
 └── execution_log.json # Recent execution history

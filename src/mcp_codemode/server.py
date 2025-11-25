@@ -54,7 +54,7 @@ class ExecutionMode(str, Enum):
     # Future: PYODIDE = "pyodide"  # Run in WASM sandbox
 
 # Directory for persistent data
-DATA_DIR = Path.home() / ".mcp-codemode"
+DATA_DIR = Path.home() / ".mcp-pyrunner"
 LEARNING_FILE = DATA_DIR / "learnings.json"
 EXECUTION_LOG = DATA_DIR / "execution_log.json"
 CONFIG_FILE = DATA_DIR / "config.json"

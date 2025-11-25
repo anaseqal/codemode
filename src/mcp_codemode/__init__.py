@@ -22,7 +22,7 @@ def main():
     parser.add_argument(
         "--version", "-v",
         action="version",
-        version=f"mcp-codemode {__version__}"
+        version=f"mcp-pyrunner {__version__}"
     )
     parser.parse_args()
     mcp.run()
