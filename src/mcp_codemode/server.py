@@ -30,9 +30,12 @@ import hashlib
 import traceback
 import re
 import shutil
+import select
+import threading
+import queue
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, Generator
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 
@@ -145,15 +148,17 @@ LLMs are better at writing code than making tool calls - leverage this!
 
 Available tools:
 - get_system_context: Get environment info before writing code
-- execute_code: Run Python code (auto-installs missing packages)
-- execute_with_retry: Run with intelligent retry and error learning
+- run_python: Run Python code (auto-installs missing packages)
+- run_python_stream: Run Python with real-time streaming output
+- run_with_retry: Run with intelligent retry and error learning
 - add_learning: Record solutions for future reference
 - get_learnings: View past learnings
-- install_package: Pre-install a specific package
+- pip_install: Pre-install a specific package
 - configure: View/update settings
 
 Tips:
 - Always use print() to output results
+- Use run_python_stream for long-running tasks to see progress in real-time
 - Complex tasks can be done in one code block
 - Packages are auto-installed on ImportError
 - Learnings persist and improve future executions
@@ -566,11 +571,181 @@ def execute_code(
     timeout = timeout or CONFIG.get("default_timeout", 60)
     auto_install = auto_install if auto_install is not None else CONFIG.get("auto_install", True)
     mode = mode or CONFIG.get("execution_mode", "direct")
-    
+
     if mode == ExecutionMode.DOCKER.value:
         return execute_in_docker(code, timeout)
     else:
         return execute_direct(code, timeout, auto_install)
+
+
+def execute_streaming(
+    code: str,
+    timeout: int = 60,
+    auto_install: bool = True
+) -> Generator[str, None, dict]:
+    """
+    Execute code with streaming output (yields lines as they're produced).
+
+    Yields:
+        Lines of output (stdout/stderr) as they're generated
+
+    Returns:
+        Final execution result dict
+    """
+    result = {
+        "success": False,
+        "stdout": "",
+        "stderr": "",
+        "return_code": -1,
+        "execution_time": 0.0,
+        "installed_packages": [],
+        "mode": "direct-stream",
+    }
+
+    max_install_attempts = 3
+    install_attempts = 0
+    stdout_lines = []
+    stderr_lines = []
+
+    while install_attempts <= max_install_attempts:
+        start = datetime.now()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            # Start process with line-buffered output
+            process = subprocess.Popen(
+                [sys.executable, temp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=str(Path.home()),
+                env={**os.environ, "PYTHONUNBUFFERED": "1"}
+            )
+
+            # Platform-specific streaming
+            if platform.system() == 'Windows':
+                # Windows: Use threads for non-blocking I/O
+                stdout_queue = queue.Queue()
+                stderr_queue = queue.Queue()
+
+                def enqueue_output(pipe, q):
+                    for line in iter(pipe.readline, ''):
+                        q.put(line)
+                    pipe.close()
+
+                stdout_thread = threading.Thread(target=enqueue_output, args=(process.stdout, stdout_queue))
+                stderr_thread = threading.Thread(target=enqueue_output, args=(process.stderr, stderr_queue))
+                stdout_thread.daemon = True
+                stderr_thread.daemon = True
+                stdout_thread.start()
+                stderr_thread.start()
+
+                # Read from queues
+                while process.poll() is None or not stdout_queue.empty() or not stderr_queue.empty():
+                    try:
+                        line = stdout_queue.get_nowait()
+                        stdout_lines.append(line)
+                        yield f"[OUT] {line.rstrip()}"
+                    except queue.Empty:
+                        pass
+
+                    try:
+                        line = stderr_queue.get_nowait()
+                        stderr_lines.append(line)
+                        yield f"[ERR] {line.rstrip()}"
+                    except queue.Empty:
+                        pass
+
+                    # Check timeout
+                    if (datetime.now() - start).total_seconds() > timeout:
+                        process.kill()
+                        yield f"[TIMEOUT] Execution exceeded {timeout}s"
+                        break
+
+            else:
+                # Unix: Use select for non-blocking I/O
+                import fcntl
+
+                # Set non-blocking mode
+                for pipe in [process.stdout, process.stderr]:
+                    flags = fcntl.fcntl(pipe, fcntl.F_GETFL)
+                    fcntl.fcntl(pipe, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                # Stream output
+                while True:
+                    # Check if process is done
+                    if process.poll() is not None:
+                        # Drain remaining output
+                        for line in process.stdout:
+                            stdout_lines.append(line)
+                            yield f"[OUT] {line.rstrip()}"
+                        for line in process.stderr:
+                            stderr_lines.append(line)
+                            yield f"[ERR] {line.rstrip()}"
+                        break
+
+                    # Check timeout
+                    if (datetime.now() - start).total_seconds() > timeout:
+                        process.kill()
+                        yield f"[TIMEOUT] Execution exceeded {timeout}s"
+                        break
+
+                    # Wait for data with timeout
+                    readable, _, _ = select.select([process.stdout, process.stderr], [], [], 0.1)
+
+                    for stream in readable:
+                        line = stream.readline()
+                        if line:
+                            if stream == process.stdout:
+                                stdout_lines.append(line)
+                                yield f"[OUT] {line.rstrip()}"
+                            else:
+                                stderr_lines.append(line)
+                                yield f"[ERR] {line.rstrip()}"
+
+            # Get final status
+            process.wait()
+            result["return_code"] = process.returncode
+            result["stdout"] = "".join(stdout_lines)
+            result["stderr"] = "".join(stderr_lines)
+            result["execution_time"] = (datetime.now() - start).total_seconds()
+
+            if result["return_code"] == 0:
+                result["success"] = True
+                break
+
+            # Try auto-install
+            if auto_install and install_attempts < max_install_attempts:
+                missing = extract_missing_module(result["stderr"])
+                if missing:
+                    yield f"[INSTALL] Detected missing module: {missing}"
+                    success, msg = install_package(missing)
+                    if success:
+                        result["installed_packages"].append(missing)
+                        yield f"[INSTALL] {msg}"
+                        install_attempts += 1
+                        stdout_lines = []
+                        stderr_lines = []
+                        continue
+
+            break
+
+        except Exception as e:
+            result["stderr"] = f"Execution error: {str(e)}\n{traceback.format_exc()}"
+            yield f"[ERROR] {str(e)}"
+            break
+        finally:
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+
+    return result
 
 
 def log_execution(code: str, description: str, result: dict):
@@ -702,6 +877,100 @@ def run_python(
     log_execution(code, description, result)
     
     return "\n".join(parts)
+
+
+@mcp.tool()
+def run_python_stream(
+    code: str,
+    description: str = "",
+    timeout: int = 60,
+    auto_install: bool = True
+) -> str:
+    """
+    Execute Python code with REAL-TIME STREAMING OUTPUT.
+
+    Perfect for long-running tasks where you want to see progress as it happens:
+    - Web scraping multiple pages (see each page as it's scraped)
+    - Data processing loops (see progress through large datasets)
+    - API calls with retries (see each attempt)
+    - File operations (see each file as it's processed)
+    - Long computations (see intermediate results)
+
+    Output streams in real-time as the code executes, so you see results
+    immediately instead of waiting for the entire execution to complete.
+
+    Args:
+        code: Python code to execute. Use print() liberally for progress updates.
+        description: Brief task description (for logging)
+        timeout: Max execution time in seconds
+        auto_install: Auto-install missing packages
+
+    Returns:
+        Streaming output followed by execution summary
+
+    Example:
+        code = '''
+        import time
+        for i in range(5):
+            print(f"Processing item {i+1}/5...")
+            time.sleep(1)
+        print("✓ Done!")
+        '''
+
+    The output will appear line-by-line as the code runs, not all at once at the end.
+    """
+    # Collect all streamed output
+    output_lines = []
+
+    if description:
+        output_lines.append(f"📋 Task: {description}")
+        output_lines.append("🔄 Streaming output (real-time)...\n")
+
+    # Stream execution
+    start_time = datetime.now()
+    result = None
+
+    try:
+        # Execute streaming - generator will yield lines and return result
+        gen = execute_streaming(code, timeout, auto_install)
+
+        try:
+            while True:
+                line = next(gen)
+                output_lines.append(line)
+        except StopIteration as e:
+            # The return value is in e.value
+            result = e.value
+
+    except Exception as e:
+        output_lines.append(f"\n❌ Streaming error: {str(e)}")
+        result = {
+            "success": False,
+            "execution_time": (datetime.now() - start_time).total_seconds(),
+            "mode": "direct-stream",
+            "installed_packages": [],
+        }
+
+    # Add summary
+    output_lines.append("\n" + "─" * 60)
+
+    if result and isinstance(result, dict):
+        status = "✅ SUCCESS" if result.get("success") else "❌ FAILED"
+        exec_time = result.get("execution_time", 0)
+        mode = result.get("mode", "direct-stream")
+        packages = result.get("installed_packages", [])
+
+        output_lines.append(f"{status} | ⏱️ {exec_time:.2f}s | Mode: {mode}")
+
+        if packages:
+            output_lines.append(f"📦 Auto-installed: {', '.join(packages)}")
+
+        # Log execution
+        log_execution(code, description, result)
+    else:
+        output_lines.append("⏱️ Execution completed")
+
+    return "\n".join(output_lines)
 
 
 @mcp.tool()

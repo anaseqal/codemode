@@ -55,6 +55,9 @@ Write Python to accomplish any task - HTTP requests, file operations, data proce
 ### 📦 Auto-Install Dependencies
 Missing a package? Code Mode detects `ModuleNotFoundError`, installs the package, and retries automatically.
 
+### 🌊 Streaming Output (NEW!)
+See results in real-time! `run_python_stream` shows output line-by-line as your code executes. Perfect for long-running tasks, progress bars, and monitoring live operations.
+
 ### 🧠 Learning System
 Records error patterns and solutions. Future executions benefit from past learnings. Persists across sessions.
 
@@ -140,6 +143,7 @@ Add to `.cursor/mcp.json`:
 |------|-------------|
 | `get_system_context` | Get environment info before writing code |
 | `run_python` | Execute Python code (auto-installs packages) |
+| `run_python_stream` | Execute with **real-time streaming output** |
 | `run_with_retry` | Execute with intelligent retry and error analysis |
 | `add_learning` | Record solutions for future reference |
 | `get_learnings` | View/search past learnings |
@@ -210,6 +214,36 @@ for img_path in photos.glob("*.jpg"):
     img.thumbnail((800, 600))
     img.save(img_path)
     print(f"Resized: {img_path.name}")
+```
+
+### Streaming Output (Real-Time Progress)
+
+```
+User: "Scrape top 20 HN posts with progress updates"
+
+→ run_python_stream:
+import requests
+from bs4 import BeautifulSoup
+import time
+
+print("🔍 Starting to scrape Hacker News...")
+
+resp = requests.get("https://news.ycombinator.com")
+soup = BeautifulSoup(resp.text, "html.parser")
+stories = soup.select(".titleline > a")[:20]
+
+print(f"📊 Found {len(stories)} stories. Processing...\n")
+
+for i, story in enumerate(stories, 1):
+    # Show progress in real-time
+    progress = "█" * i + "░" * (20 - i)
+    print(f"[{progress}] {i}/20: {story.text}")
+    time.sleep(0.5)  # See each item appear live!
+
+print("\n✅ Scraping complete!")
+
+# Output appears LINE BY LINE as the code runs,
+# not all at once at the end!
 ```
 
 ## Configuration Options
@@ -300,9 +334,9 @@ uv run mcp dev src/mcp_codemode/server.py
 
 Contributions welcome! Areas of interest:
 
+- [x] ~~Streaming output for long-running code~~ ✅ **DONE!**
 - [ ] Vector DB for semantic learning search
 - [ ] Pyodide/WASM sandboxing option
-- [ ] Streaming output for long-running code
 - [ ] Code analysis before execution
 - [ ] Resource usage tracking
 - [ ] Multi-file project support
