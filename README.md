@@ -94,6 +94,8 @@ uv sync
 
 ### Goose
 
+**If installed from PyPI:**
+
 Edit `~/.config/goose/config.yaml`:
 
 ```yaml
@@ -105,12 +107,25 @@ extensions:
     args: ["mcp-codemode"]
 ```
 
-Or use the UI: Extensions → Add Custom Extension → STDIO → Command: `uvx mcp-codemode`
+**If running from source (local development):**
+
+```yaml
+extensions:
+  codemode:
+    type: stdio
+    enabled: true
+    cmd: uv
+    args: ["run", "--directory", "/path/to/codemode", "mcp-codemode"]
+    # Replace /path/to/codemode with actual path (e.g., ~/codemode)
+```
+
+Or use the UI: Extensions → Add Custom Extension → STDIO → Command: `uv run --directory /path/to/codemode mcp-codemode`
 
 ### Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
+**If installed from PyPI:**
 ```json
 {
   "mcpServers": {
@@ -122,16 +137,41 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
+**If running from source:**
+```json
+{
+  "mcpServers": {
+    "codemode": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/codemode", "mcp-codemode"]
+    }
+  }
+}
+```
+
 ### Cursor
 
 Add to `.cursor/mcp.json`:
 
+**If installed from PyPI:**
 ```json
 {
   "mcpServers": {
     "codemode": {
       "command": "uvx",
       "args": ["mcp-codemode"]
+    }
+  }
+}
+```
+
+**If running from source:**
+```json
+{
+  "mcpServers": {
+    "codemode": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/codemode", "mcp-codemode"]
     }
   }
 }
