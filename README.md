@@ -1,0 +1,318 @@
+# MCP Code Mode 🐍⚡
+
+**Universal Python code execution MCP server - one tool to rule them all.**
+
+Inspired by [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/): LLMs are better at writing code than making tool calls because they've trained on millions of real repositories.
+
+## Why Code Mode?
+
+**Traditional approach** (many tools):
+```
+User: "Get weather for Austin and save to file"
+
+LLM: [tool_call: get_weather(location="Austin")]
+     → waits for response...
+LLM: [tool_call: write_file(path="weather.txt", content=...)]
+     → waits for response...
+```
+
+**Code Mode approach** (one tool):
+```
+User: "Get weather for Austin and save to file"
+
+LLM: [run_python]
+import requests
+weather = requests.get("https://wttr.in/Austin?format=j1").json()
+temp = weather['current_condition'][0]['temp_F']
+with open("weather.txt", "w") as f:
+    f.write(f"Austin: {temp}°F")
+print(f"Saved! Temperature: {temp}°F")
+```
+
+### Benefits
+
+| Traditional Tools | Code Mode |
+|------------------|-----------|
+| ❌ LLMs struggle with synthetic tool-call format | ✅ LLMs excel at writing real code |
+| ❌ Each tool call = round trip to LLM | ✅ Complex workflows in one execution |
+| ❌ Managing 20+ extensions | ✅ One universal tool |
+| ❌ Token waste passing data between calls | ✅ Efficient data flow in code |
+| ❌ Limited to pre-built capabilities | ✅ Anything Python can do |
+
+## Works With Any MCP Client
+
+- ✅ **Goose** (Block's AI agent)
+- ✅ **Claude Desktop**
+- ✅ **Cursor**
+- ✅ **VS Code with Copilot**
+- ✅ **Any MCP-compatible agent**
+
+## Features
+
+### 🚀 Universal Execution
+Write Python to accomplish any task - HTTP requests, file operations, data processing, web scraping, image manipulation, and more.
+
+### 📦 Auto-Install Dependencies
+Missing a package? Code Mode detects `ModuleNotFoundError`, installs the package, and retries automatically.
+
+### 🧠 Learning System
+Records error patterns and solutions. Future executions benefit from past learnings. Persists across sessions.
+
+### 🔄 Intelligent Retry
+`run_with_retry` analyzes failures and suggests fixes based on error patterns and past learnings.
+
+### 🐳 Optional Docker Sandbox
+Run code in isolated Docker containers for enhanced security.
+
+### ⚙️ Configurable
+Adjust timeouts, execution modes, package restrictions, and more.
+
+## Installation
+
+### From PyPI (when published)
+
+```bash
+# Using uv (recommended)
+uv tool install mcp-codemode
+
+# Using pip
+pip install mcp-codemode
+```
+
+### From Source
+
+```bash
+git clone https://github.com/anaseqal/codemode.git
+cd codemode
+uv sync
+```
+
+## Configuration
+
+### Goose
+
+Edit `~/.config/goose/config.yaml`:
+
+```yaml
+extensions:
+  codemode:
+    type: stdio
+    enabled: true
+    cmd: uvx
+    args: ["mcp-codemode"]
+```
+
+Or use the UI: Extensions → Add Custom Extension → STDIO → Command: `uvx mcp-codemode`
+
+### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "codemode": {
+      "command": "uvx",
+      "args": ["mcp-codemode"]
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "codemode": {
+      "command": "uvx",
+      "args": ["mcp-codemode"]
+    }
+  }
+}
+```
+
+## Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_system_context` | Get environment info before writing code |
+| `run_python` | Execute Python code (auto-installs packages) |
+| `run_with_retry` | Execute with intelligent retry and error analysis |
+| `add_learning` | Record solutions for future reference |
+| `get_learnings` | View/search past learnings |
+| `pip_install` | Pre-install a specific package |
+| `configure` | View/update settings |
+
+## Usage Examples
+
+### Web Scraping
+
+```
+User: "Scrape the top 10 posts from Hacker News"
+
+→ run_python:
+import requests
+from bs4 import BeautifulSoup
+
+resp = requests.get("https://news.ycombinator.com")
+soup = BeautifulSoup(resp.text, "html.parser")
+
+for i, item in enumerate(soup.select(".titleline > a")[:10], 1):
+    print(f"{i}. {item.text}")
+    print(f"   {item['href']}\n")
+```
+
+### Data Processing
+
+```
+User: "Analyze sales.csv and show monthly totals"
+
+→ run_python:
+import pandas as pd
+
+df = pd.read_csv("sales.csv")
+df["date"] = pd.to_datetime(df["date"])
+monthly = df.groupby(df["date"].dt.to_period("M"))["amount"].sum()
+
+print("Monthly Sales:")
+for period, total in monthly.items():
+    print(f"  {period}: ${total:,.2f}")
+```
+
+### API Integration
+
+```
+User: "Get the current Bitcoin price in USD"
+
+→ run_python:
+import requests
+
+data = requests.get("https://api.coinbase.com/v2/prices/BTC-USD/spot").json()
+price = float(data["data"]["amount"])
+print(f"Bitcoin: ${price:,.2f} USD")
+```
+
+### Image Processing
+
+```
+User: "Resize all images in ./photos to 800x600"
+
+→ run_python:
+from pathlib import Path
+from PIL import Image
+
+photos = Path("./photos")
+for img_path in photos.glob("*.jpg"):
+    img = Image.open(img_path)
+    img.thumbnail((800, 600))
+    img.save(img_path)
+    print(f"Resized: {img_path.name}")
+```
+
+## Configuration Options
+
+View current config:
+```
+→ configure()
+```
+
+Update settings:
+```
+→ configure(action="set", key="execution_mode", value="docker")
+→ configure(action="set", key="default_timeout", value="120")
+```
+
+| Setting | Values | Description |
+|---------|--------|-------------|
+| `execution_mode` | `direct`, `docker` | How to run code |
+| `default_timeout` | integer | Default timeout (seconds) |
+| `max_retries` | integer | Default retry attempts |
+| `auto_install` | `true`, `false` | Auto-install packages |
+| `docker_image` | string | Docker image for sandbox |
+
+## Learning System
+
+When you solve an error, record it:
+
+```
+→ add_learning(
+    error_pattern="SSL: CERTIFICATE_VERIFY_FAILED",
+    solution="Use verify=False or install/update certifi",
+    context="HTTPS requests on systems with cert issues",
+    tags="ssl,https,certificates"
+)
+```
+
+View learnings:
+```
+→ get_learnings()
+→ get_learnings(search="ssl")
+```
+
+Learnings persist in `~/.mcp-codemode/learnings.json` and improve future executions.
+
+## Data Storage
+
+Code Mode stores data in `~/.mcp-codemode/`:
+
+```
+~/.mcp-codemode/
+├── config.json       # User configuration
+├── learnings.json    # Error patterns and solutions
+└── execution_log.json # Recent execution history
+```
+
+## Security Considerations
+
+⚠️ **Code Mode executes arbitrary Python code.**
+
+**Direct mode** (default):
+- Code runs with your user permissions
+- Full filesystem and network access
+- Fast execution
+
+**Docker mode** (more secure):
+- Code runs in isolated container
+- Limited resources (512MB RAM, 1 CPU)
+- Network access available
+- Slower startup
+
+Enable Docker mode:
+```
+→ configure(action="set", key="execution_mode", value="docker")
+```
+
+## Testing
+
+```bash
+# Run tests
+uv run pytest
+
+# Test with MCP Inspector
+uv run mcp dev src/mcp_codemode/server.py
+# Open http://localhost:5173
+```
+
+## Contributing
+
+Contributions welcome! Areas of interest:
+
+- [ ] Vector DB for semantic learning search
+- [ ] Pyodide/WASM sandboxing option
+- [ ] Streaming output for long-running code
+- [ ] Code analysis before execution
+- [ ] Resource usage tracking
+- [ ] Multi-file project support
+
+## License
+
+MIT
+
+## Acknowledgments
+
+- [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/) for the inspiration
+- [Model Context Protocol](https://modelcontextprotocol.io/) for the standard
+- [Block's Goose](https://github.com/block/goose) for being an excellent MCP client
