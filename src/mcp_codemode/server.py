@@ -80,7 +80,10 @@ def load_config() -> dict:
             return {**DEFAULT_CONFIG, **json.loads(CONFIG_FILE.read_text())}
         except Exception:
             pass
-    return DEFAULT_CONFIG.copy()
+    # Save default config on first run
+    config = DEFAULT_CONFIG.copy()
+    save_config(config)
+    return config
 
 def save_config(config: dict):
     """Save configuration"""
@@ -781,6 +784,81 @@ def extract_error_type(stderr: str) -> Optional[str]:
     match = re.search(r"(\w+Error|\w+Exception):", stderr)
     return match.group(1) if match else None
 
+
+def auto_learn_from_error(stderr: str, installed_packages: list[str]) -> None:
+    """
+    Automatically learn from common error patterns.
+
+    This captures frequently-seen errors and their solutions without
+    requiring manual intervention.
+    """
+    if not stderr:
+        return
+
+    stderr_lower = stderr.lower()
+
+    # Pattern 1: Module not found (when auto-install worked)
+    if installed_packages:
+        for pkg in installed_packages:
+            pattern = f"ModuleNotFoundError.*{pkg}"
+            solution = f"Auto-install {pkg} package"
+            context = f"Missing {pkg} module - resolved by auto-installation"
+            try:
+                # Check if we already have this learning
+                existing = learning_store.find_relevant(pattern, limit=1)
+                if not existing or existing[0].error_pattern != pattern:
+                    learning_store.add(pattern, solution, context, ["auto-install", "module"])
+            except Exception:
+                pass  # Don't fail execution if learning fails
+
+    # Pattern 2: SSL Certificate errors
+    if "ssl" in stderr_lower and "certificate" in stderr_lower:
+        pattern = "SSL.*CERTIFICATE_VERIFY_FAILED"
+        solution = "Add verify=False to requests, or: pip install --upgrade certifi"
+        context = "HTTPS requests failing due to SSL certificate validation"
+        try:
+            existing = learning_store.find_relevant(pattern, limit=1)
+            if not existing:
+                learning_store.add(pattern, solution, context, ["ssl", "https", "certificates"])
+        except Exception:
+            pass
+
+    # Pattern 3: Permission errors
+    if "permission" in stderr_lower and "denied" in stderr_lower:
+        pattern = "PermissionError.*denied"
+        solution = "Use /tmp for temporary files, or check file/directory permissions"
+        context = "File/directory access permission issues"
+        try:
+            existing = learning_store.find_relevant(pattern, limit=1)
+            if not existing:
+                learning_store.add(pattern, solution, context, ["permissions", "filesystem"])
+        except Exception:
+            pass
+
+    # Pattern 4: File not found
+    if "filenotfounderror" in stderr_lower or "no such file" in stderr_lower:
+        pattern = "FileNotFoundError"
+        solution = "Check file path exists with Path(file).exists() before opening"
+        context = "Attempting to access non-existent file"
+        try:
+            existing = learning_store.find_relevant(pattern, limit=1)
+            if not existing:
+                learning_store.add(pattern, solution, context, ["filesystem", "path"])
+        except Exception:
+            pass
+
+    # Pattern 5: Timeout errors
+    if "timeout" in stderr_lower:
+        pattern = "timeout|TimeoutError"
+        solution = "Increase timeout parameter or check network connectivity"
+        context = "Operation exceeded timeout limit"
+        try:
+            existing = learning_store.find_relevant(pattern, limit=1)
+            if not existing:
+                learning_store.add(pattern, solution, context, ["network", "timeout"])
+        except Exception:
+            pass
+
 # ============================================================================
 # MCP Tools
 # ============================================================================
@@ -873,9 +951,12 @@ def run_python(
     if result["stderr"]:
         parts.append("\n─── ERRORS ───")
         parts.append(result["stderr"])
-    
+
+    # Auto-learn from errors
+    auto_learn_from_error(result["stderr"], result.get("installed_packages", []))
+
     log_execution(code, description, result)
-    
+
     return "\n".join(parts)
 
 
@@ -964,6 +1045,9 @@ def run_python_stream(
 
         if packages:
             output_lines.append(f"📦 Auto-installed: {', '.join(packages)}")
+
+        # Auto-learn from errors
+        auto_learn_from_error(result.get("stderr", ""), result.get("installed_packages", []))
 
         # Log execution
         log_execution(code, description, result)
@@ -1057,9 +1141,12 @@ def run_with_retry(
                 parts.append("   → Check: Does the file/path exist?")
             elif error_type == "PermissionError":
                 parts.append("   → Try: Use /tmp for file operations")
-    
+
+    # Auto-learn from errors
+    auto_learn_from_error(result["stderr"], result.get("installed_packages", []))
+
     log_execution(code, description, result)
-    
+
     return "\n".join(parts)
 
 

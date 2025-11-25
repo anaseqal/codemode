@@ -10,7 +10,7 @@ than making tool calls because they've trained on millions of real repos.
 import argparse
 from .server import mcp
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Anas Eqal"
 
 
