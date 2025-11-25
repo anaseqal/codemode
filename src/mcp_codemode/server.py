@@ -144,27 +144,34 @@ MODULE_TO_PACKAGE = {
 
 mcp = FastMCP(
     "mcp-codemode",
-    instructions="""Universal Python code execution server.
+    instructions="""Universal Python code execution server with AUTOMATIC LEARNING.
 
 Instead of using many specialized tools, write Python code to accomplish ANY task.
 LLMs are better at writing code than making tool calls - leverage this!
 
+🎯 IMPORTANT: This server learns from failures automatically!
+- When code fails, the error and solution are recorded
+- Call get_system_context() FIRST to see past learnings and avoid repeating mistakes
+- Past learnings show you what failed before and how to fix it
+- Success rate improves over time as the system learns
+
 Available tools:
-- get_system_context: Get environment info before writing code
+- get_system_context: Get environment info + PAST LEARNINGS (call this FIRST!)
 - run_python: Run Python code (auto-installs missing packages)
 - run_python_stream: Run Python with real-time streaming output
 - run_with_retry: Run with intelligent retry and error learning
 - add_learning: Record solutions for future reference
-- get_learnings: View past learnings
+- get_learnings: View/search past learnings
 - pip_install: Pre-install a specific package
 - configure: View/update settings
 
 Tips:
-- Always use print() to output results
-- Use run_python_stream for long-running tasks to see progress in real-time
+- ALWAYS call get_system_context() first to see learnings and avoid known errors
+- Use print() to output results
+- Use run_python_stream for long-running tasks
 - Complex tasks can be done in one code block
 - Packages are auto-installed on ImportError
-- Learnings persist and improve future executions
+- The system learns from every error and gets smarter over time
 """
 )
 
@@ -333,6 +340,31 @@ def get_system_info() -> dict:
     }
 
 
+def get_top_learnings_for_context() -> str:
+    """Get the most relevant learnings formatted for LLM context (concise to save tokens)"""
+    if not learning_store.learnings:
+        return "   None yet"
+
+    # Sort by success count (most helpful learnings first)
+    sorted_learnings = sorted(
+        learning_store.learnings,
+        key=lambda x: (x.success_count, x.failure_count),
+        reverse=True
+    )[:5]  # Top 5 only (reduced from 10)
+
+    if not sorted_learnings:
+        return "   None yet"
+
+    lines = []
+    for i, l in enumerate(sorted_learnings, 1):
+        # Concise format: just error type and key solution
+        error_short = l.error_pattern.split(".*")[0] if ".*" in l.error_pattern else l.error_pattern[:30]
+        solution_short = l.solution[:60] + "..." if len(l.solution) > 60 else l.solution
+        lines.append(f"   • {error_short}: {solution_short}")
+
+    return "\n".join(lines) if lines else "   None yet"
+
+
 def format_system_context() -> str:
     """Format system info as context for code generation"""
     info = get_system_info()
@@ -375,8 +407,11 @@ def format_system_context() -> str:
    • Network access available (requests, httpx, etc.)
    • Files in /tmp are safe for temporary storage
 
-📚 LEARNINGS FROM PAST EXECUTIONS
+📚 LEARNINGS FROM PAST EXECUTIONS (Learn from these to avoid repeating mistakes!)
 {learning_store.get_summary()}
+
+🎯 MOST COMMON ERRORS TO AVOID
+{get_top_learnings_for_context()}
 
 💡 TIPS
    • For complex tasks, break into logical steps
@@ -797,17 +832,26 @@ def auto_learn_from_error(stderr: str, installed_packages: list[str]) -> None:
 
     stderr_lower = stderr.lower()
 
-    # Pattern 1: Module not found (when auto-install worked)
-    if installed_packages:
-        for pkg in installed_packages:
-            pattern = f"ModuleNotFoundError.*{pkg}"
-            solution = f"Auto-install {pkg} package"
-            context = f"Missing {pkg} module - resolved by auto-installation"
+    # Pattern 1: Module not found
+    if "modulenotfounderror" in stderr_lower or "no module named" in stderr_lower:
+        # Extract module name
+        match = re.search(r"No module named ['\"]([^'\"]+)['\"]", stderr, re.IGNORECASE)
+        if match:
+            module_name = match.group(1).split(".")[0]
+            pattern = f"ModuleNotFoundError.*{module_name}"
+
+            if installed_packages and module_name in installed_packages:
+                solution = f"Auto-installed {module_name} successfully"
+                context = f"Missing {module_name} module - resolved by auto-installation"
+            else:
+                solution = f"Install {module_name}: pip install {module_name} (or use pip_install tool)"
+                context = f"Missing {module_name} module - needs manual installation"
+
             try:
                 # Check if we already have this learning
                 existing = learning_store.find_relevant(pattern, limit=1)
                 if not existing or existing[0].error_pattern != pattern:
-                    learning_store.add(pattern, solution, context, ["auto-install", "module"])
+                    learning_store.add(pattern, solution, context, ["module", "import"])
             except Exception:
                 pass  # Don't fail execution if learning fails
 
@@ -858,6 +902,24 @@ def auto_learn_from_error(stderr: str, installed_packages: list[str]) -> None:
                 learning_store.add(pattern, solution, context, ["network", "timeout"])
         except Exception:
             pass
+
+    # Pattern 6: Generic error capture (fallback)
+    # Capture any unhandled error type for future reference
+    error_match = re.search(r"(\w+Error|\w+Exception):", stderr)
+    if error_match:
+        error_type = error_match.group(1)
+        # Only add if we don't already have a specific learning for this error
+        specific_patterns = ["ModuleNotFoundError", "FileNotFoundError", "PermissionError", "TimeoutError", "SSL"]
+        if not any(p in stderr for p in specific_patterns):
+            pattern = f"{error_type}"
+            solution = f"Review error message and traceback. Common fix: check parameters and environment."
+            context = f"Generic {error_type} - needs specific analysis"
+            try:
+                existing = learning_store.find_relevant(pattern, limit=1)
+                if not existing or existing[0].error_pattern != pattern:
+                    learning_store.add(pattern, solution, context, ["error", "generic"])
+            except Exception:
+                pass
 
 # ============================================================================
 # MCP Tools
