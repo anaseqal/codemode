@@ -33,6 +33,8 @@ import shutil
 import select
 import threading
 import queue
+import base64
+import mimetypes
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, Generator
@@ -325,18 +327,44 @@ def get_installed_packages() -> dict[str, str]:
 
 def get_system_info() -> dict:
     """Gather comprehensive system information"""
+    # Get pip version
+    pip_version = "unknown"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "--version"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            # Extract version from "pip X.Y.Z from ..."
+            pip_version = result.stdout.split()[1] if len(result.stdout.split()) > 1 else "unknown"
+    except Exception:
+        pass
+
+    # Get package manager info
+    package_managers = {
+        "pip": shutil.which("pip") or shutil.which("pip3"),
+        "uv": shutil.which("uv"),
+        "poetry": shutil.which("poetry"),
+        "conda": shutil.which("conda"),
+    }
+
     return {
         "os": platform.system(),
         "os_release": platform.release(),
+        "os_version": platform.version(),
         "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
         "python_executable": sys.executable,
+        "pip_version": pip_version,
         "architecture": platform.machine(),
         "hostname": platform.node(),
         "cwd": os.getcwd(),
         "home": str(Path.home()),
+        "temp_dir": tempfile.gettempdir(),
         "user": os.environ.get("USER", os.environ.get("USERNAME", "unknown")),
         "execution_mode": CONFIG.get("execution_mode", "direct"),
         "docker_available": shutil.which("docker") is not None,
+        "package_managers": {k: v is not None for k, v in package_managers.items()},
     }
 
 
@@ -379,22 +407,31 @@ def format_system_context() -> str:
         else:
             installed_libs.append(f"  ○ {mod}: {desc} (will auto-install)")
     
+    # Format package managers
+    pm_list = [f"{k}: {'✓' if v else '✗'}" for k, v in info['package_managers'].items()]
+
     context = f"""
 ╔══════════════════════════════════════════════════════════════════╗
 ║                    MCP CODE MODE - SYSTEM CONTEXT                 ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 🖥️  SYSTEM
-   OS: {info['os']} {info['os_release']}
-   Python: {info['python_version']}
+   OS: {info['os']} {info['os_release']} ({info['os_version']})
+   Python: {info['python_version']} ({info['python_implementation']})
+   pip: {info['pip_version']}
    Architecture: {info['architecture']}
+   Hostname: {info['hostname']}
+   User: {info['user']}
    Execution Mode: {info['execution_mode']}
-   Docker Available: {'Yes' if info['docker_available'] else 'No'}
+   Docker Available: {'Yes ✓' if info['docker_available'] else 'No ✗'}
+
+📦 PACKAGE MANAGERS
+   {' | '.join(pm_list)}
 
 📁 PATHS
    Working Directory: {info['cwd']}
    Home: {info['home']}
-   Temp: {tempfile.gettempdir()}
+   Temp: {info['temp_dir']}
 
 📦 AVAILABLE LIBRARIES
 {chr(10).join(installed_libs)}
@@ -820,6 +857,148 @@ def extract_error_type(stderr: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def detect_and_encode_files(stdout: str, max_files: int = 5) -> list[dict]:
+    """
+    Detect file paths in stdout and return them as MCP content (images, text, resources).
+
+    Supports all MCP content types:
+    - Images: PNG, JPG, GIF, SVG, etc. (displayed inline)
+    - Text files: Source code, logs, JSON, CSV, etc. (displayed as text)
+    - Resources: PDFs, archives, etc. (available for download)
+
+    This enables rich file display in MCP clients like Goose, Claude Desktop, etc.
+
+    Args:
+        stdout: The stdout from code execution
+        max_files: Maximum number of files to encode (to avoid huge responses)
+
+    Returns:
+        List of MCP content dictionaries
+    """
+    content = []
+
+    # File type categorization
+    image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico'}
+    text_extensions = {
+        '.txt', '.log', '.md', '.json', '.yaml', '.yml', '.xml', '.csv', '.tsv',
+        '.py', '.js', '.ts', '.html', '.css', '.java', '.c', '.cpp', '.go', '.rs',
+        '.sh', '.bash', '.sql', '.env', '.toml', '.ini', '.conf', '.cfg'
+    }
+    resource_extensions = {'.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar'}
+
+    all_extensions = image_extensions | text_extensions | resource_extensions
+
+    # Build regex pattern for all extensions
+    ext_pattern = '|'.join(ext.replace('.', '\\.') for ext in all_extensions)
+
+    # Pattern to find file paths (common formats)
+    # Matches: /path/to/file.ext, ./file.ext, ~/file.ext, C:\path\file.ext
+    path_patterns = [
+        rf'(?:^|\s)([\/~.][\w\/\-\.]+\.(?:{ext_pattern}))',  # Unix paths
+        rf'([A-Za-z]:\\[\w\\\.]+\.(?:{ext_pattern}))',  # Windows paths
+    ]
+
+    found_paths = set()
+    for pattern in path_patterns:
+        matches = re.findall(pattern, stdout, re.IGNORECASE | re.MULTILINE)
+        found_paths.update(matches)
+
+    # Also check for explicit mentions like "Saved to: path"
+    saved_pattern = rf'(?:saved|written|created|output|screenshot|exported|generated|wrote)(?:\s+to)?:?\s+([^\s\n]+\.(?:{ext_pattern}))'
+    saved_matches = re.findall(saved_pattern, stdout, re.IGNORECASE)
+    found_paths.update(saved_matches)
+
+    # Convert to Path objects and encode
+    for path_str in found_paths:
+        if len(content) >= max_files:
+            break
+
+        try:
+            # Expand user home directory (~)
+            path = Path(path_str).expanduser().resolve()
+
+            # Check if file exists
+            if not path.exists() or not path.is_file():
+                continue
+
+            # Get file extension
+            ext = path.suffix.lower()
+
+            # Skip files larger than 10MB to avoid huge responses
+            file_size = path.stat().st_size
+            if file_size > 10 * 1024 * 1024:
+                continue
+
+            # Process based on file type
+            if ext in image_extensions:
+                # Image content
+                with open(path, 'rb') as f:
+                    encoded_data = base64.b64encode(f.read()).decode('utf-8')
+
+                # Get MIME type
+                mime_type, _ = mimetypes.guess_type(str(path))
+                if not mime_type:
+                    ext_to_mime = {
+                        '.png': 'image/png',
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg',
+                        '.gif': 'image/gif',
+                        '.bmp': 'image/bmp',
+                        '.webp': 'image/webp',
+                        '.svg': 'image/svg+xml',
+                        '.ico': 'image/x-icon'
+                    }
+                    mime_type = ext_to_mime.get(ext, 'image/png')
+
+                content.append({
+                    "type": "image",
+                    "data": encoded_data,
+                    "mimeType": mime_type
+                })
+
+            elif ext in text_extensions:
+                # Text content - read as text
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        text_content = f.read()
+
+                    # Limit text content to 50KB
+                    if len(text_content) > 50000:
+                        text_content = text_content[:50000] + "\n\n... (truncated)"
+
+                    content.append({
+                        "type": "text",
+                        "text": f"📄 File: {path.name}\n```\n{text_content}\n```"
+                    })
+                except UnicodeDecodeError:
+                    # If can't decode as text, skip
+                    continue
+
+            elif ext in resource_extensions:
+                # Resource content (PDFs, archives, etc.)
+                with open(path, 'rb') as f:
+                    encoded_data = base64.b64encode(f.read()).decode('utf-8')
+
+                mime_type, _ = mimetypes.guess_type(str(path))
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+
+                content.append({
+                    "type": "resource",
+                    "resource": {
+                        "uri": f"file://{path}",
+                        "mimeType": mime_type,
+                        "blob": encoded_data
+                    }
+                })
+
+        except Exception:
+            # Silently skip files that can't be processed
+            continue
+
+    return content
+
+
 def auto_learn_from_error(stderr: str, installed_packages: list[str]) -> None:
     """
     Automatically learn from common error patterns.
@@ -962,10 +1141,10 @@ def run_python(
     description: str = "",
     timeout: int = 60,
     auto_install: bool = True
-) -> str:
+):
     """
     Execute Python code to accomplish ANY task.
-    
+
     This is a universal tool - write Python to do what you need:
     - HTTP requests (requests, httpx, aiohttp)
     - Parse HTML (beautifulsoup4, lxml)
@@ -974,16 +1153,16 @@ def run_python(
     - System commands (subprocess)
     - Images (Pillow, opencv)
     - And anything else Python can do!
-    
+
     Args:
         code: Python code to execute. Use print() for output.
         description: Brief task description (for logging)
         timeout: Max execution time in seconds
         auto_install: Auto-install missing packages
-    
+
     Returns:
-        Execution result with stdout, stderr, and status
-    
+        Execution result with stdout, stderr, status, and any generated images
+
     Example:
         code = '''
         import requests
@@ -994,22 +1173,29 @@ def run_python(
         '''
     """
     result = _execute_code_internal(code, timeout, auto_install)
-    
+
+    # Detect files (images, text, resources) in output
+    detected_files = detect_and_encode_files(result["stdout"])
+
     # Format output
     parts = []
-    
+
     if description:
         parts.append(f"📋 Task: {description}")
-    
+
     status = "✅ SUCCESS" if result["success"] else "❌ FAILED"
     parts.append(f"{status} | ⏱️ {result['execution_time']:.2f}s | Mode: {result.get('mode', 'direct')}")
-    
+
     if result["installed_packages"]:
         parts.append(f"📦 Auto-installed: {', '.join(result['installed_packages'])}")
-    
+
+    # Note about detected files
+    if detected_files:
+        parts.append(f"📎 Detected {len(detected_files)} file(s) - displaying below")
+
     parts.append("\n─── OUTPUT ───")
     parts.append(result["stdout"] if result["stdout"] else "(no output)")
-    
+
     if result["stderr"]:
         parts.append("\n─── ERRORS ───")
         parts.append(result["stderr"])
@@ -1019,7 +1205,21 @@ def run_python(
 
     log_execution(code, description, result)
 
-    return "\n".join(parts)
+    # Build text output
+    text_output = "\n".join(parts)
+
+    # Return structured content if files were detected
+    if detected_files:
+        return [
+            {
+                "type": "text",
+                "text": text_output
+            },
+            *detected_files  # Spread the file content objects
+        ]
+    else:
+        # Return plain text for backward compatibility
+        return text_output
 
 
 @mcp.tool()
@@ -1028,7 +1228,7 @@ def run_python_stream(
     description: str = "",
     timeout: int = 60,
     auto_install: bool = True
-) -> str:
+):
     """
     Execute Python code with REAL-TIME STREAMING OUTPUT.
 
@@ -1049,7 +1249,7 @@ def run_python_stream(
         auto_install: Auto-install missing packages
 
     Returns:
-        Streaming output followed by execution summary
+        Streaming output followed by execution summary, with any generated images
 
     Example:
         code = '''
@@ -1097,6 +1297,13 @@ def run_python_stream(
     # Add summary
     output_lines.append("\n" + "─" * 60)
 
+    # Detect files (images, text, resources) from the result stdout
+    detected_files = []
+    if result and isinstance(result, dict) and result.get("stdout"):
+        detected_files = detect_and_encode_files(result["stdout"])
+        if detected_files:
+            output_lines.append(f"📎 Detected {len(detected_files)} file(s) - displaying below")
+
     if result and isinstance(result, dict):
         status = "✅ SUCCESS" if result.get("success") else "❌ FAILED"
         exec_time = result.get("execution_time", 0)
@@ -1116,7 +1323,21 @@ def run_python_stream(
     else:
         output_lines.append("⏱️ Execution completed")
 
-    return "\n".join(output_lines)
+    # Build text output
+    text_output = "\n".join(output_lines)
+
+    # Return structured content if files were detected
+    if detected_files:
+        return [
+            {
+                "type": "text",
+                "text": text_output
+            },
+            *detected_files  # Spread the file content objects
+        ]
+    else:
+        # Return plain text for backward compatibility
+        return text_output
 
 
 @mcp.tool()

@@ -55,8 +55,16 @@ Write Python to accomplish any task - HTTP requests, file operations, data proce
 ### 📦 Auto-Install Dependencies
 Missing a package? Code Mode detects `ModuleNotFoundError`, installs the package, and retries automatically.
 
-### 🌊 Streaming Output (NEW!)
+### 🌊 Streaming Output
 See results in real-time! `run_python_stream` shows output line-by-line as your code executes. Perfect for long-running tasks, progress bars, and monitoring live operations.
+
+### 🖼️ Automatic File Display (NEW!)
+Generated images, logs, or data files? Code Mode automatically detects and displays them in your MCP client! Supports:
+- **Images**: PNG, JPG, GIF, SVG, etc. (displayed inline)
+- **Text Files**: JSON, logs, source code, CSV, etc. (shown with syntax highlighting)
+- **Resources**: PDFs, archives (available for download)
+
+Just print the file path and Code Mode handles the rest!
 
 ### 🧠 Learning System
 Records error patterns and solutions. Future executions benefit from past learnings. Persists across sessions.
@@ -181,9 +189,9 @@ Add to `.cursor/mcp.json`:
 
 | Tool | Description |
 |------|-------------|
-| `get_system_context` | Get environment info before writing code |
-| `run_python` | Execute Python code (auto-installs packages) |
-| `run_python_stream` | Execute with **real-time streaming output** |
+| `get_system_context` | Get environment info (OS, Python, pip versions, package managers, learnings) |
+| `run_python` | Execute Python code (auto-installs packages, auto-displays files) |
+| `run_python_stream` | Execute with **real-time streaming output** (auto-displays files) |
 | `run_with_retry` | Execute with intelligent retry and error analysis |
 | `add_learning` | Record solutions for future reference |
 | `get_learnings` | View/search past learnings |
@@ -286,6 +294,46 @@ print("\n✅ Scraping complete!")
 # not all at once at the end!
 ```
 
+### Automatic File Display
+
+```
+User: "Take a screenshot of example.com and create a summary report"
+
+→ run_python:
+from playwright.sync_api import sync_playwright
+import json
+
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    page = browser.new_page()
+    page.goto("https://example.com")
+
+    # Take screenshot
+    screenshot_path = "/tmp/example_screenshot.png"
+    page.screenshot(path=screenshot_path)
+
+    # Create report
+    report = {
+        "url": "https://example.com",
+        "title": page.title(),
+        "screenshot": screenshot_path,
+        "timestamp": "2025-01-26T12:00:00"
+    }
+
+    report_path = "/tmp/report.json"
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
+
+    browser.close()
+
+    # Print file paths - Code Mode auto-detects and displays them!
+    print(f"Screenshot saved to: {screenshot_path}")
+    print(f"Report saved to: {report_path}")
+
+# Result: Your MCP client displays the screenshot IMAGE inline
+# and shows the JSON content formatted - no manual handling needed!
+```
+
 ## Configuration Options
 
 View current config:
@@ -375,6 +423,8 @@ uv run mcp dev src/mcp_codemode/server.py
 Contributions welcome! Areas of interest:
 
 - [x] ~~Streaming output for long-running code~~ ✅ **DONE!**
+- [x] ~~Automatic file display (images, text, resources)~~ ✅ **DONE!**
+- [x] ~~Enhanced system context (pip version, package managers)~~ ✅ **DONE!**
 - [ ] Vector DB for semantic learning search
 - [ ] Pyodide/WASM sandboxing option
 - [ ] Code analysis before execution
