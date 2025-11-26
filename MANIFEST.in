@@ -1,0 +1,23 @@
+# Include necessary files
+include README.md
+include LICENSE
+
+# Exclude sensitive files - NEVER package these
+exclude .env
+exclude .env.*
+exclude *.key
+exclude *.pem
+exclude credentials.json
+
+# Exclude development files
+exclude .vscode
+exclude .idea
+recursive-exclude .vscode *
+recursive-exclude .idea *
+
+# Exclude test files
+exclude test_*.py
+recursive-exclude tests *
+
+# Exclude build artifacts
+exclude .DS_Store
