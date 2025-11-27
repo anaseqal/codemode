@@ -58,19 +58,23 @@ Missing a package? Code Mode detects `ModuleNotFoundError`, installs the package
 ### 🌊 Streaming Output
 See results in real-time! `run_python_stream` shows output line-by-line as your code executes. Perfect for long-running tasks, progress bars, and monitoring live operations.
 
-### 🖼️ Automatic File Display (NEW!)
+### 🖼️ Automatic File Display (Goose Compatible!)
 Generated images, logs, or data files? Code Mode automatically detects and displays them in your MCP client! Supports:
-- **Images**: PNG, JPG, GIF, SVG, etc. (displayed inline)
-- **Text Files**: JSON, logs, source code, CSV, etc. (shown with syntax highlighting)
-- **Resources**: PDFs, archives (available for download)
+- **Images**: PNG, JPG, GIF, SVG, HEIC, TIFF, etc. (displayed inline)
+- **Text Files**: JSON, logs, source code (Python, JS, TS, Go, Rust, etc.), CSV, YAML, etc. (shown with syntax highlighting)
+- **Resources**: PDFs, archives, videos (MP4, MOV), audio (MP3, WAV), Office docs, databases (available for download)
 
-Just print the file path and Code Mode handles the rest!
+Just print the file path and Code Mode handles the rest! Works seamlessly with Goose and other MCP clients.
 
-### 🧠 Learning System
-Records error patterns and solutions. Future executions benefit from past learnings. Persists across sessions.
+### 🧠 Dual Learning System (Enhanced!)
+Records **both error-based and semantic failures**:
+- **Error Learning**: Captures errors (ModuleNotFoundError, SSL errors, etc.) and their solutions
+- **Semantic Learning**: Learns when code runs successfully but doesn't accomplish the objective
+
+Future executions benefit from past learnings. Persists across sessions.
 
 ### 🔄 Intelligent Retry
-`run_with_retry` analyzes failures and suggests fixes based on error patterns and past learnings.
+`run_with_retry` analyzes failures and suggests fixes based on both error patterns and semantic learnings from similar tasks.
 
 ### 🐳 Optional Docker Sandbox
 Run code in isolated Docker containers for enhanced security.
@@ -192,9 +196,10 @@ Add to `.cursor/mcp.json`:
 | `get_system_context` | Get environment info (OS, Python, pip versions, package managers, learnings) |
 | `run_python` | Execute Python code (auto-installs packages, auto-displays files) |
 | `run_python_stream` | Execute with **real-time streaming output** (auto-displays files) |
-| `run_with_retry` | Execute with intelligent retry and error analysis |
-| `add_learning` | Record solutions for future reference |
-| `get_learnings` | View/search past learnings |
+| `run_with_retry` | Execute with intelligent retry, error analysis, and semantic learning suggestions |
+| `add_learning` | Record error-based solutions for future reference |
+| `record_semantic_failure` | **NEW!** Record when code runs but doesn't accomplish objective |
+| `get_learnings` | View/search past learnings (both error and semantic) |
 | `pip_install` | Pre-install a specific package |
 | `configure` | View/update settings |
 
@@ -355,8 +360,11 @@ Update settings:
 | `auto_install` | `true`, `false` | Auto-install packages |
 | `docker_image` | string | Docker image for sandbox |
 
-## Learning System
+## Dual Learning System
 
+Code Mode learns from **two types of failures**:
+
+### 1. Error-Based Learning
 When you solve an error, record it:
 
 ```
@@ -368,11 +376,33 @@ When you solve an error, record it:
 )
 ```
 
-View learnings:
+### 2. Semantic Learning (NEW!)
+When code runs successfully but doesn't accomplish the objective:
+
 ```
-→ get_learnings()
-→ get_learnings(search="ssl")
+→ record_semantic_failure(
+    objective="Display image in Goose app",
+    failed_approach="Used print() to output file path",
+    successful_approach="Returned base64 encoded image as MCP content object",
+    context="MCP clients need structured content objects, not just paths",
+    tags="goose,mcp,display,images"
+)
 ```
+
+**Why semantic learning matters:**
+- Code executed without errors ≠ objective accomplished
+- AI learns from "technically correct but semantically wrong" approaches
+- Future attempts at similar objectives benefit from past semantic learnings
+
+### View Learnings
+```
+→ get_learnings()              # View all learnings (error + semantic)
+→ get_learnings(search="ssl")  # Search learnings
+```
+
+**Learnings are distinguished by icons:**
+- 🔴 Error-based learnings
+- 🔵 Semantic learnings
 
 Learnings persist in `~/.mcp-pyrunner/learnings.json` and improve future executions.
 

@@ -183,7 +183,12 @@ Tips:
 
 @dataclass
 class Learning:
-    """A learned pattern from execution errors"""
+    """A learned pattern from execution errors or semantic failures
+
+    Supports two types of failures:
+    1. error: Traditional error-based learning (ModuleNotFoundError, etc.)
+    2. semantic: Code executed successfully but didn't accomplish the objective
+    """
     error_pattern: str
     solution: str
     context: str
@@ -192,6 +197,10 @@ class Learning:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_used: str = field(default_factory=lambda: datetime.now().isoformat())
     tags: list[str] = field(default_factory=list)
+    # Semantic failure fields
+    failure_type: str = "error"  # "error" or "semantic"
+    objective: str = ""  # What was being attempted (for semantic failures)
+    failed_approach: str = ""  # What approach didn't work (for semantic failures)
 
 
 class LearningStore:
@@ -214,10 +223,21 @@ class LearningStore:
         data = [asdict(l) for l in self.learnings]
         self.filepath.write_text(json.dumps(data, indent=2))
     
-    def add(self, error_pattern: str, solution: str, context: str, tags: list[str] = None):
-        """Add or update a learning"""
+    def add(self, error_pattern: str, solution: str, context: str, tags: list[str] = None,
+            failure_type: str = "error", objective: str = "", failed_approach: str = ""):
+        """Add or update a learning
+
+        Args:
+            error_pattern: Pattern to match (error message or objective description)
+            solution: How to fix it
+            context: Additional context
+            tags: Categorization tags
+            failure_type: "error" for errors, "semantic" for semantic failures
+            objective: What was being attempted (semantic failures)
+            failed_approach: What approach didn't work (semantic failures)
+        """
         tags = tags or []
-        
+
         # Check for existing pattern
         for l in self.learnings:
             if l.error_pattern == error_pattern:
@@ -226,38 +246,88 @@ class LearningStore:
                 l.success_count += 1
                 l.last_used = datetime.now().isoformat()
                 l.tags = list(set(l.tags + tags))
+                l.failure_type = failure_type
+                l.objective = objective
+                l.failed_approach = failed_approach
                 self._save()
                 return
-        
+
         self.learnings.append(Learning(
             error_pattern=error_pattern,
             solution=solution,
             context=context,
-            tags=tags
+            tags=tags,
+            failure_type=failure_type,
+            objective=objective,
+            failed_approach=failed_approach
         ))
         self._save()
+
+    def add_semantic_failure(self, objective: str, failed_approach: str,
+                            successful_approach: str, context: str = "", tags: list[str] = None):
+        """Add a semantic failure learning (code ran but didn't accomplish goal)
+
+        Args:
+            objective: What you were trying to accomplish
+            failed_approach: What you tried that didn't work
+            successful_approach: What actually worked
+            context: Additional context about why it failed
+            tags: Categorization tags
+        """
+        tags = tags or []
+        tags.append("semantic")
+
+        self.add(
+            error_pattern=objective,
+            solution=successful_approach,
+            context=context or f"Failed approach: {failed_approach}",
+            tags=tags,
+            failure_type="semantic",
+            objective=objective,
+            failed_approach=failed_approach
+        )
     
     def find_relevant(self, error: str, code: str = "", limit: int = 5) -> list[Learning]:
-        """Find learnings that might help with an error"""
+        """Find learnings that might help with an error or objective
+
+        Args:
+            error: Error message or objective description to search for
+            code: Optional code context
+            limit: Maximum number of results
+
+        Returns:
+            List of relevant learnings, sorted by relevance score
+        """
         relevant = []
         error_lower = error.lower()
-        
+
         for learning in self.learnings:
             score = 0
-            try:
-                if re.search(learning.error_pattern, error, re.IGNORECASE):
+
+            if learning.failure_type == "error":
+                # For error learnings: pattern is regex to match in error message
+                try:
+                    if re.search(learning.error_pattern, error, re.IGNORECASE):
+                        score += 10
+                except re.error:
+                    if learning.error_pattern.lower() in error_lower:
+                        score += 5
+            else:
+                # For semantic learnings: search for keywords in objective/pattern
+                if error_lower in learning.error_pattern.lower():
                     score += 10
-            except re.error:
-                if learning.error_pattern.lower() in error_lower:
+                if error_lower in learning.objective.lower():
+                    score += 8
+                if error_lower in learning.failed_approach.lower():
                     score += 5
-            
+
             # Boost by success rate
             if learning.success_count > 0:
                 score += min(learning.success_count, 5)
-            
+
             if score > 0:
                 relevant.append((score, learning))
-        
+
         relevant.sort(key=lambda x: -x[0])
         return [l for _, l in relevant[:limit]]
     
@@ -282,24 +352,28 @@ class LearningStore:
         """Get a summary of all learnings"""
         if not self.learnings:
             return "No learnings recorded yet. Execute code and learn from errors!"
-        
-        lines = [f"📚 {len(self.learnings)} learnings recorded:\n"]
-        
+
+        error_learnings = [l for l in self.learnings if l.failure_type == "error"]
+        semantic_learnings = [l for l in self.learnings if l.failure_type == "semantic"]
+
+        lines = [f"📚 {len(self.learnings)} learnings recorded ({len(error_learnings)} error, {len(semantic_learnings)} semantic):\n"]
+
         # Sort by success count
         sorted_learnings = sorted(
-            self.learnings, 
-            key=lambda x: x.success_count, 
+            self.learnings,
+            key=lambda x: x.success_count,
             reverse=True
         )
-        
+
         for i, l in enumerate(sorted_learnings[:15], 1):
+            icon = "🔴" if l.failure_type == "error" else "🔵"
             pattern_short = l.error_pattern[:40] + "..." if len(l.error_pattern) > 40 else l.error_pattern
-            lines.append(f"{i}. [{l.success_count}✓/{l.failure_count}✗] {pattern_short}")
+            lines.append(f"{i}. {icon} [{l.success_count}✓/{l.failure_count}✗] {pattern_short}")
             lines.append(f"   → {l.solution[:60]}...")
-        
+
         if len(self.learnings) > 15:
             lines.append(f"\n   ... and {len(self.learnings) - 15} more")
-        
+
         return "\n".join(lines)
 
 
@@ -877,25 +951,40 @@ def detect_and_encode_files(stdout: str, max_files: int = 5) -> list[dict]:
     """
     content = []
 
-    # File type categorization
-    image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico'}
+    # File type categorization (expanded for Goose compatibility)
+    image_extensions = {
+        '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico',
+        '.tiff', '.tif', '.heic', '.heif'  # Additional image formats
+    }
     text_extensions = {
         '.txt', '.log', '.md', '.json', '.yaml', '.yml', '.xml', '.csv', '.tsv',
-        '.py', '.js', '.ts', '.html', '.css', '.java', '.c', '.cpp', '.go', '.rs',
-        '.sh', '.bash', '.sql', '.env', '.toml', '.ini', '.conf', '.cfg'
+        '.py', '.js', '.ts', '.tsx', '.jsx', '.html', '.css', '.java', '.c', '.cpp', '.go', '.rs',
+        '.sh', '.bash', '.sql', '.env', '.toml', '.ini', '.conf', '.cfg',
+        '.vue', '.svelte', '.rb', '.php', '.swift', '.kt', '.scala',  # Additional languages
+        '.dockerfile', '.makefile', '.gradle', '.properties'  # Build files
     }
-    resource_extensions = {'.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar'}
+    resource_extensions = {
+        '.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
+        '.mp4', '.mov', '.avi', '.mkv', '.webm',  # Video
+        '.mp3', '.wav', '.ogg', '.m4a', '.flac',  # Audio
+        '.xlsx', '.xls', '.docx', '.doc', '.pptx', '.ppt',  # Office documents
+        '.parquet', '.db', '.sqlite', '.sqlite3'  # Data files
+    }
 
     all_extensions = image_extensions | text_extensions | resource_extensions
 
-    # Build regex pattern for all extensions
-    ext_pattern = '|'.join(ext.replace('.', '\\.') for ext in all_extensions)
+    # Build regex pattern for all extensions (no escaping needed in alternation)
+    ext_pattern = '|'.join(ext.lstrip('.') for ext in all_extensions)
 
-    # Pattern to find file paths (common formats)
+    # Enhanced pattern to find file paths (common formats)
     # Matches: /path/to/file.ext, ./file.ext, ~/file.ext, C:\path\file.ext
+    # Also handles quoted paths and paths in structured output
     path_patterns = [
-        rf'(?:^|\s)([\/~.][\w\/\-\.]+\.(?:{ext_pattern}))',  # Unix paths
-        rf'([A-Za-z]:\\[\w\\\.]+\.(?:{ext_pattern}))',  # Windows paths
+        rf'(?:^|\s)([\/~.][\w\/\-\.\s]+\.(?:{ext_pattern}))',  # Unix paths (with spaces)
+        rf'([A-Za-z]:\\[\w\\\-\.\s]+\.(?:{ext_pattern}))',  # Windows paths (with spaces)
+        rf'["\']([^"\']+\.(?:{ext_pattern}))["\']',  # Quoted paths (both single and double quotes)
+        rf'file://([^\s\'"]+\.(?:{ext_pattern}))',  # file:// URLs
+        rf'path["\']?\s*:\s*["\']([^"\']+\.(?:{ext_pattern}))["\']',  # JSON/dict: "path": "file.ext"
     ]
 
     found_paths = set()
@@ -904,21 +993,31 @@ def detect_and_encode_files(stdout: str, max_files: int = 5) -> list[dict]:
         found_paths.update(matches)
 
     # Also check for explicit mentions like "Saved to: path"
-    saved_pattern = rf'(?:saved|written|created|output|screenshot|exported|generated|wrote)(?:\s+to)?:?\s+([^\s\n]+\.(?:{ext_pattern}))'
+    saved_pattern = rf'(?:saved|written|created|output|screenshot|exported|generated|wrote|downloaded|stored|placed)(?:\s+to|at|in)?:?\s+["\']?([^\s\n\'"]+\.(?:{ext_pattern}))["\']?'
     saved_matches = re.findall(saved_pattern, stdout, re.IGNORECASE)
     found_paths.update(saved_matches)
 
     # Convert to Path objects and encode
+    processed_count = 0
+    skipped_reasons = []
+
     for path_str in found_paths:
         if len(content) >= max_files:
             break
 
         try:
+            # Clean up path string (remove quotes, strip whitespace)
+            path_str = path_str.strip().strip('"\'')
+
             # Expand user home directory (~)
             path = Path(path_str).expanduser().resolve()
 
             # Check if file exists
-            if not path.exists() or not path.is_file():
+            if not path.exists():
+                skipped_reasons.append(f"{path.name}: file not found")
+                continue
+            if not path.is_file():
+                skipped_reasons.append(f"{path.name}: not a file")
                 continue
 
             # Get file extension
@@ -927,7 +1026,10 @@ def detect_and_encode_files(stdout: str, max_files: int = 5) -> list[dict]:
             # Skip files larger than 10MB to avoid huge responses
             file_size = path.stat().st_size
             if file_size > 10 * 1024 * 1024:
+                skipped_reasons.append(f"{path.name}: too large ({file_size / 1024 / 1024:.1f}MB)")
                 continue
+
+            processed_count += 1
 
             # Process based on file type
             if ext in image_extensions:
@@ -992,9 +1094,18 @@ def detect_and_encode_files(stdout: str, max_files: int = 5) -> list[dict]:
                     }
                 })
 
-        except Exception:
-            # Silently skip files that can't be processed
+        except Exception as e:
+            # Track files that can't be processed
+            skipped_reasons.append(f"{Path(path_str).name}: error ({type(e).__name__})")
             continue
+
+    # Add debug info as a text content if files were found but some were skipped
+    if skipped_reasons and len(content) < len(found_paths):
+        debug_msg = f"\n📎 File detection: {processed_count} file(s) encoded, {len(skipped_reasons)} skipped"
+        if skipped_reasons[:3]:  # Show first 3 reasons
+            debug_msg += "\nSkipped: " + ", ".join(skipped_reasons[:3])
+        # Note: This debug message is intentionally not added to content to keep output clean
+        # It can be uncommented for debugging purposes
 
     return content
 
@@ -1349,23 +1460,28 @@ def run_with_retry(
 ) -> str:
     """
     Execute Python code with intelligent retry and error analysis.
-    
+
     On failure, this tool:
     1. Analyzes the error pattern
-    2. Searches past learnings for solutions
+    2. Searches past learnings (both error-based and semantic) for solutions
     3. Provides diagnostic information
-    4. Suggests fixes based on error type
-    
-    Use this for more robust execution when errors are expected.
-    
+    4. Suggests fixes based on error type and similar objectives
+
+    IMPORTANT: Use record_semantic_failure() if code runs successfully but doesn't
+    accomplish the objective. This helps the system learn from non-error failures.
+
+    Use this for more robust execution when errors are expected or when learning
+    from previous similar tasks.
+
     Args:
         code: Python code to execute
-        description: Task description
+        description: Task description (helps find relevant semantic learnings)
         max_retries: Max retry attempts (same code)
         timeout: Execution timeout in seconds
-    
+
     Returns:
-        Detailed execution result with retry info and suggestions
+        Detailed execution result with retry info and suggestions from both
+        error and semantic learnings
     """
     attempts = []
     result = None
@@ -1402,18 +1518,31 @@ def run_with_retry(
     parts.append("\n─── OUTPUT ───")
     parts.append(result["stdout"] if result["stdout"] else "(no output)")
     
+    # Show semantic learnings if description provided
+    if description:
+        semantic_learnings = learning_store.find_relevant(description, code)
+        semantic_only = [l for l in semantic_learnings if l.failure_type == "semantic"]
+        if semantic_only:
+            parts.append("\n💡 RELEVANT SEMANTIC LEARNINGS:")
+            parts.append(f"   (Based on objective: '{description}')")
+            for i, learning in enumerate(semantic_only[:3], 1):
+                parts.append(f"   {i}. 🎯 {learning.objective}")
+                parts.append(f"      ❌ Avoid: {learning.failed_approach}")
+                parts.append(f"      ✅ Use: {learning.solution}")
+
     if not result["success"] and result["stderr"]:
         parts.append("\n─── ERROR ANALYSIS ───")
         parts.append(result["stderr"])
-        
-        # Find relevant learnings
+
+        # Find relevant error learnings
         relevant = learning_store.find_relevant(result["stderr"], code)
-        if relevant:
-            parts.append("\n💡 SUGGESTIONS FROM PAST LEARNINGS:")
-            for i, learning in enumerate(relevant, 1):
+        error_only = [l for l in relevant if l.failure_type == "error"]
+        if error_only:
+            parts.append("\n💡 SUGGESTIONS FROM PAST ERROR LEARNINGS:")
+            for i, learning in enumerate(error_only, 1):
                 parts.append(f"   {i}. {learning.solution}")
                 parts.append(f"      Context: {learning.context}")
-        
+
         # Suggest based on error type
         error_type = extract_error_type(result["stderr"])
         if error_type:
@@ -1424,6 +1553,10 @@ def run_with_retry(
                 parts.append("   → Check: Does the file/path exist?")
             elif error_type == "PermissionError":
                 parts.append("   → Try: Use /tmp for file operations")
+
+    elif result["success"]:
+        parts.append("\n✅ Code executed successfully!")
+        parts.append("   If output doesn't match objective, use record_semantic_failure()")
 
     # Auto-learn from errors
     auto_learn_from_error(result["stderr"], result.get("installed_packages", []))
@@ -1477,6 +1610,61 @@ This will help with similar errors in future executions."""
 
 
 @mcp.tool()
+def record_semantic_failure(
+    objective: str,
+    failed_approach: str,
+    successful_approach: str,
+    context: str = "",
+    tags: str = ""
+) -> str:
+    """
+    Record a semantic failure: when code executed successfully but didn't accomplish the goal.
+
+    This is different from error-based learning. Use this when:
+    - Code ran without errors but produced wrong output
+    - Tool was used but didn't achieve the intended objective
+    - An approach worked technically but failed semantically
+
+    Args:
+        objective: What you were trying to accomplish
+        failed_approach: What you tried that didn't work (even though it ran)
+        successful_approach: What actually worked to accomplish the objective
+        context: Why the first approach failed or additional context
+        tags: Comma-separated tags (e.g., "api,authentication,retry")
+
+    Example:
+        record_semantic_failure(
+            objective="Display image in Goose app",
+            failed_approach="Used print() to output file path",
+            successful_approach="Returned base64 encoded image as MCP content object",
+            context="MCP clients need structured content objects, not just paths",
+            tags="goose,mcp,display,images"
+        )
+
+    Returns:
+        Confirmation message
+    """
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    learning_store.add_semantic_failure(
+        objective=objective,
+        failed_approach=failed_approach,
+        successful_approach=successful_approach,
+        context=context,
+        tags=tag_list
+    )
+
+    return f"""✅ Semantic failure recorded!
+
+🎯 Objective: {objective}
+❌ Failed approach: {failed_approach}
+✅ Successful approach: {successful_approach}
+📌 Context: {context or 'Not specified'}
+🏷️  Tags: {', '.join(tag_list) if tag_list else 'none'}
+
+This will help avoid similar semantic mistakes in future executions."""
+
+
+@mcp.tool()
 def get_learnings(search: str = "") -> str:
     """
     View recorded learnings from past executions.
@@ -1493,26 +1681,36 @@ def get_learnings(search: str = "") -> str:
     # Search learnings
     matches = []
     search_lower = search.lower()
-    
+
     for l in learning_store.learnings:
-        if (search_lower in l.error_pattern.lower() or 
+        if (search_lower in l.error_pattern.lower() or
             search_lower in l.solution.lower() or
             search_lower in l.context.lower() or
+            search_lower in l.objective.lower() or
+            search_lower in l.failed_approach.lower() or
             any(search_lower in t.lower() for t in l.tags)):
             matches.append(l)
-    
+
     if not matches:
         return f"No learnings found matching '{search}'"
-    
+
     lines = [f"🔍 {len(matches)} learnings matching '{search}':\n"]
     for i, l in enumerate(matches, 1):
-        lines.append(f"{i}. {l.error_pattern[:50]}...")
-        lines.append(f"   → {l.solution}")
+        icon = "🔴" if l.failure_type == "error" else "🔵"
+        lines.append(f"{i}. {icon} {l.error_pattern[:50]}...")
+
+        if l.failure_type == "semantic":
+            lines.append(f"   🎯 Objective: {l.objective}")
+            lines.append(f"   ❌ Failed: {l.failed_approach}")
+            lines.append(f"   ✅ Success: {l.solution}")
+        else:
+            lines.append(f"   → {l.solution}")
+
         lines.append(f"   Context: {l.context}")
         if l.tags:
             lines.append(f"   Tags: {', '.join(l.tags)}")
         lines.append("")
-    
+
     return "\n".join(lines)
 
 
